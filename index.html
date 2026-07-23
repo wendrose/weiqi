@@ -409,7 +409,7 @@
                 currentPlayer = currentPlayer === BLACK ? WHITE : BLACK;
                 updateCapturedDisplay(); updatePlayerHighlight(); drawBoard();
                 if (capturedPositions.length) showToast(`🔥 提走 ${capturedPositions.length} 子`);
-                if (gameMode === 'pve' && !gameOver && currentPlayer === aiColor) {
+                if (gameMode === 'pve' && !gameOver && currentPlayer === aiColor && !isAIThinking) {
                     setTimeout(() => aiMove(), 100);
                 }
                 return true;
@@ -428,7 +428,7 @@
                 currentPlayer = currentPlayer === BLACK ? WHITE : BLACK;
                 updatePlayerHighlight(); drawBoard();
                 showToast('🤚 ' + (currentPlayer === BLACK ? '黑方' : '白方') + '虚手');
-                if (gameMode === 'pve' && !gameOver && currentPlayer === aiColor) {
+                if (gameMode === 'pve' && !gameOver && currentPlayer === aiColor && !isAIThinking) {
                     setTimeout(() => aiMove(), 100);
                 }
             }
@@ -587,92 +587,98 @@
                 isAIThinking = true;
                 aiThinkingDiv.style.display = 'block';
                 disableButtons(true);
-                showToast('🤖 AI 思考中...');
-                await new Promise(resolve => setTimeout(resolve, 50));
-                const aiPlayer = aiColor;
-                const { candidateMax, simPerMove, timeLimit } = getAIParams();
-                const startTime = Date.now();
+                try {
+                    showToast('🤖 AI 思考中...');
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                    const aiPlayer = aiColor;
+                    const { candidateMax, simPerMove, timeLimit } = getAIParams();
+                    const startTime = Date.now();
 
-                // 收集候选点
-                const hasStoneNearby = new Set();
-                for (let r = 0; r < BOARD_SIZE; r++) {
-                    for (let c = 0; c < BOARD_SIZE; c++) {
-                        if (board[r][c] !== EMPTY) {
-                            for (let dr = -2; dr <= 2; dr++) {
-                                for (let dc = -2; dc <= 2; dc++) {
-                                    if (Math.abs(dr)+Math.abs(dc) <= 2) {
-                                        const nr = r+dr, nc = c+dc;
-                                        if (nr>=0 && nr<BOARD_SIZE && nc>=0 && nc<BOARD_SIZE && board[nr][nc]===EMPTY)
-                                            hasStoneNearby.add(`${nr},${nc}`);
+                    // 收集候选点
+                    const hasStoneNearby = new Set();
+                    for (let r = 0; r < BOARD_SIZE; r++) {
+                        for (let c = 0; c < BOARD_SIZE; c++) {
+                            if (board[r][c] !== EMPTY) {
+                                for (let dr = -2; dr <= 2; dr++) {
+                                    for (let dc = -2; dc <= 2; dc++) {
+                                        if (Math.abs(dr)+Math.abs(dc) <= 2) {
+                                            const nr = r+dr, nc = c+dc;
+                                            if (nr>=0 && nr<BOARD_SIZE && nc>=0 && nc<BOARD_SIZE && board[nr][nc]===EMPTY)
+                                                hasStoneNearby.add(`${nr},${nc}`);
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                let candidates = [];
-                for (const key of hasStoneNearby) {
-                    const [r,c] = key.split(',').map(Number);
-                    if (board[r][c] === EMPTY) candidates.push({row:r, col:c});
-                }
-                if (candidates.length === 0) {
-                    const defaults = [[9,9],[3,3],[3,9],[3,15],[9,3],[9,15],[15,3],[15,9],[15,15]];
-                    for (const [r,c] of defaults) if(board[r][c]===EMPTY) candidates.push({row:r,col:c});
-                    if(candidates.length===0)
-                        for(let r=0;r<BOARD_SIZE;r++) for(let c=0;c<BOARD_SIZE;c++) if(board[r][c]===EMPTY) candidates.push({row:r,col:c});
-                }
-                // 过滤合法且排序（启发式：周围棋子多优先）
-                let legalMoves = [];
-                for (const m of candidates) {
-                    if (!isSuicide(m.row, m.col, aiPlayer) && !isKoViolation(m.row, m.col, aiPlayer))
-                        legalMoves.push(m);
-                }
-                if (legalMoves.length === 0) {
-                    isAIThinking = false; aiThinkingDiv.style.display = 'none'; disableButtons(false);
-                    doPass(); return;
-                }
-                legalMoves.sort((a,b) => countNearbyStones(b.row,b.col) - countNearbyStones(a.row,a.col));
-                if (legalMoves.length > candidateMax) legalMoves = legalMoves.slice(0, candidateMax);
-
-                const boardCopy = board.map(row => [...row]);
-                const currentHash = previousBoardHash;
-                const results = [];
-                let timeExceeded = false;
-                for (const move of legalMoves) {
-                    if (Date.now() - startTime > timeLimit * 0.8) { timeExceeded = true; break; }
-                    let wins = 0;
-                    const simBoard = boardCopy.map(row => [...row]);
-                    simBoard[move.row][move.col] = aiPlayer;
-                    const origBoard = board; const origPrevHash = previousBoardHash;
-                    board = simBoard; previousBoardHash = currentHash;
-                    const captured = findCapturedOpponentGroups(move.row, move.col, aiPlayer);
-                    for (const {row:cr, col:cc} of captured) simBoard[cr][cc] = EMPTY;
-                    const newHash = getBoardHash();
-                    board = origBoard; previousBoardHash = origPrevHash;
-                    const opponent = aiPlayer === BLACK ? WHITE : BLACK;
-                    const simsToRun = Math.min(simPerMove, Math.floor((timeLimit - (Date.now()-startTime)) / (legalMoves.length * 5)));
-                    const actualSims = Math.max(5, simsToRun);
-                    for (let i = 0; i < actualSims; i++) {
-                        if (Date.now() - startTime > timeLimit) break;
-                        const winnerSide = simulatePlayout(simBoard, opponent, newHash);
-                        if (winnerSide === aiPlayer) wins++;
+                    let candidates = [];
+                    for (const key of hasStoneNearby) {
+                        const [r,c] = key.split(',').map(Number);
+                        if (board[r][c] === EMPTY) candidates.push({row:r, col:c});
                     }
-                    results.push({ move, wins, total: actualSims });
-                }
-                if (results.length === 0) {
-                    // 超时未评估任何点，随机选一个合法点
-                    const fallback = legalMoves[Math.floor(Math.random() * legalMoves.length)];
-                    placeStone(fallback.row, fallback.col);
-                } else {
+                    if (candidates.length === 0) {
+                        const defaults = [[9,9],[3,3],[3,9],[3,15],[9,3],[9,15],[15,3],[15,9],[15,15]];
+                        for (const [r,c] of defaults) if(board[r][c]===EMPTY) candidates.push({row:r,col:c});
+                        if(candidates.length===0)
+                            for(let r=0;r<BOARD_SIZE;r++) for(let c=0;c<BOARD_SIZE;c++) if(board[r][c]===EMPTY) candidates.push({row:r,col:c});
+                    }
+                    // 过滤合法
+                    let legalMoves = [];
+                    for (const m of candidates) {
+                        if (!isSuicide(m.row, m.col, aiPlayer) && !isKoViolation(m.row, m.col, aiPlayer))
+                            legalMoves.push(m);
+                    }
+                    if (legalMoves.length === 0) {
+                        // 无合法落子，自动虚手
+                        doPass();
+                        return;
+                    }
+                    legalMoves.sort((a,b) => countNearbyStones(b.row,b.col) - countNearbyStones(a.row,a.col));
+                    if (legalMoves.length > candidateMax) legalMoves = legalMoves.slice(0, candidateMax);
+
+                    const boardCopy = board.map(row => [...row]);
+                    const currentHash = previousBoardHash;
+                    let results = [];
+                    for (const move of legalMoves) {
+                        if (Date.now() - startTime > timeLimit * 0.8) break;
+                        let wins = 0;
+                        const simBoard = boardCopy.map(row => [...row]);
+                        simBoard[move.row][move.col] = aiPlayer;
+                        const origBoard = board; const origPrevHash = previousBoardHash;
+                        board = simBoard; previousBoardHash = currentHash;
+                        const captured = findCapturedOpponentGroups(move.row, move.col, aiPlayer);
+                        for (const {row:cr, col:cc} of captured) simBoard[cr][cc] = EMPTY;
+                        const newHash = getBoardHash();
+                        board = origBoard; previousBoardHash = origPrevHash;
+                        const opponent = aiPlayer === BLACK ? WHITE : BLACK;
+                        const simsToRun = Math.min(simPerMove, Math.floor((timeLimit - (Date.now()-startTime)) / (legalMoves.length * 5)));
+                        const actualSims = Math.max(5, simsToRun);
+                        for (let i = 0; i < actualSims; i++) {
+                            if (Date.now() - startTime > timeLimit) break;
+                            const winnerSide = simulatePlayout(simBoard, opponent, newHash);
+                            if (winnerSide === aiPlayer) wins++;
+                        }
+                        results.push({ move, wins, total: actualSims });
+                    }
+                    if (results.length === 0) {
+                        // 超时未完成任何评估，随机选一个合法点
+                        const fallback = legalMoves[Math.floor(Math.random() * legalMoves.length)];
+                        placeStone(fallback.row, fallback.col);
+                        return;
+                    }
                     results.sort((a,b) => (b.wins/b.total) - (a.wins/a.total));
                     const best = results[0].move;
                     if (!placeStone(best.row, best.col)) {
-                        for (const r of results.slice(1)) if (placeStone(r.move.row, r.move.col)) break;
+                        for (const r of results.slice(1)) {
+                            if (placeStone(r.move.row, r.move.col)) break;
+                        }
                     }
+                } finally {
+                    // 确保无论是否出错都重置状态
+                    isAIThinking = false;
+                    aiThinkingDiv.style.display = 'none';
+                    disableButtons(false);
                 }
-                isAIThinking = false;
-                aiThinkingDiv.style.display = 'none';
-                disableButtons(false);
             }
 
             function simulatePlayout(boardState, startPlayer, prevHash) {
